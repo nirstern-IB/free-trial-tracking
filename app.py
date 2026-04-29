@@ -1,0 +1,341 @@
+import os
+import secrets
+from datetime import date
+from functools import wraps
+
+import snowflake.connector
+import pandas as pd
+from flask import Flask, render_template, jsonify, request, redirect, url_for, session
+
+SNOWFLAKE_ACCOUNT = "lalywxa-ja51028"
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
+
+DEFAULT_START = "2026-01-01"
+DEFAULT_END   = date.today().isoformat()
+
+# In-memory connection store — keyed by session id (localhost only)
+_connections: dict = {}
+
+
+# ---------------------------------------------------------------------------
+# Connection helpers
+# ---------------------------------------------------------------------------
+
+def _open_connection(username: str):
+    return snowflake.connector.connect(
+        account=SNOWFLAKE_ACCOUNT,
+        user=username,
+        authenticator="externalbrowser",
+        warehouse="USER_WH",
+    )
+
+
+def get_user_connection():
+    sid = session.get("sid")
+    if not sid or sid not in _connections:
+        return None
+    conn = _connections[sid]
+    try:
+        conn.cursor().execute("SELECT 1")
+        return conn
+    except Exception:
+        del _connections[sid]
+        return None
+
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if get_user_connection() is None:
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "session_expired", "redirect": "/login"}), 401
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ---------------------------------------------------------------------------
+# Auth routes
+# ---------------------------------------------------------------------------
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if get_user_connection():
+        return redirect(url_for("index"))
+
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        if not username:
+            error = "Please enter your Snowflake username."
+        else:
+            try:
+                conn = _open_connection(username)
+                sid = secrets.token_hex(16)
+                _connections[sid] = conn
+                session["sid"]      = sid
+                session["username"] = username
+                return redirect(url_for("index"))
+            except Exception as e:
+                error = str(e)
+
+    return render_template("login.html", error=error)
+
+
+@app.route("/logout")
+def logout():
+    sid = session.pop("sid", None)
+    if sid and sid in _connections:
+        try:
+            _connections[sid].close()
+        except Exception:
+            pass
+        del _connections[sid]
+    session.clear()
+    return redirect(url_for("login"))
+
+
+# ---------------------------------------------------------------------------
+# Queries
+# ---------------------------------------------------------------------------
+
+BUILDS_QUERY = """
+    WITH free_trial_builds AS (
+        SELECT DISTINCT fba.BUILD_ID, fba.COORDINATOR_ID, fba.LICENSE_ID,
+               fba.START_TIMESTAMP, fba.NUMBER_OF_REMOTE_TASKS, fba.NUMBER_OF_CLOUD_TASKS
+        FROM IB_DWH.IB10_DWH.FACT_BUILD_ACTIVITY fba
+        INNER JOIN IB_DWH.IB10_DWH.DIM_LICENSE l
+                ON fba.LICENSE_ID        = l.LICENSE_ID
+               AND l.START_TIMESTAMP     < fba.START_TIMESTAMP
+               AND l.END_TIMESTAMP       > fba.END_TIMESTAMP
+               AND l.LICENSE_TIER        = 'Free Trial'
+        WHERE fba.START_TIMESTAMP >= '{start}'
+          AND fba.START_TIMESTAMP <  DATEADD(day, 1, '{end}'::DATE)
+          AND fba.BUILD_TITLE     NOT LIKE 'Incredibuild sample project%%'
+    ),
+    cache_per_build AS (
+        SELECT COORDINATOR_ID, BUILD_ID, MAX(CACHED_TASKS) AS max_cached_tasks
+        FROM IB_DATALAKE.IB10.BUILD_CACHE_STAT
+        GROUP BY COORDINATOR_ID, BUILD_ID
+    ),
+    build_data AS (
+        SELECT
+            DATE_TRUNC('day', fb.START_TIMESTAMP)::DATE          AS build_date,
+            COUNT(*)                                              AS num_builds,
+            COUNT_IF(fb.NUMBER_OF_REMOTE_TASKS > 0
+                     OR fb.NUMBER_OF_CLOUD_TASKS > 0)            AS with_distribution,
+            COUNT_IF(bcs.max_cached_tasks > 0)                   AS with_cache
+        FROM free_trial_builds fb
+        LEFT JOIN cache_per_build bcs
+               ON fb.COORDINATOR_ID = bcs.COORDINATOR_ID
+              AND fb.BUILD_ID        = bcs.BUILD_ID
+        GROUP BY 1
+    ),
+    new_agents AS (
+        SELECT first_date AS build_date, COUNT(*) AS new_agent_count
+        FROM (
+            SELECT LICENSE_ID,
+                   MIN(DATE_TRUNC('day', START_TIMESTAMP)::DATE) AS first_date
+            FROM free_trial_builds
+            GROUP BY LICENSE_ID
+        )
+        GROUP BY 1
+    )
+    SELECT
+        bd.build_date,
+        bd.num_builds,
+        bd.with_distribution,
+        bd.with_cache,
+        COALESCE(na.new_agent_count, 0) AS new_agents
+    FROM build_data bd
+    LEFT JOIN new_agents na ON bd.build_date = na.build_date
+    ORDER BY 1
+"""
+
+
+GRID_QUERY = """
+    WITH free_trial_builds AS (
+        SELECT DISTINCT
+               fba.BUILD_ID, fba.COORDINATOR_ID, fba.LICENSE_ID,
+               fba.BUILD_TITLE,
+               fba.START_TIMESTAMP, fba.END_TIMESTAMP,
+               fba.NUMBER_OF_REMOTE_TASKS, fba.NUMBER_OF_CLOUD_TASKS,
+               fba.TOTAL_CPU_TIME,
+               fba.REMOTE_CPU_TIME, fba.CLOUD_CPU_TIME,
+               fba.NUMBER_OF_CORES_ON_INITIATOR_MACHINE,
+               fba.TOTAL_CACHEABLE_TASKS,
+               fba.AVG_ACTUAL_NEEDED_HELPERS
+        FROM IB_DWH.IB10_DWH.FACT_BUILD_ACTIVITY fba
+        INNER JOIN IB_DWH.IB10_DWH.DIM_LICENSE l
+                ON fba.LICENSE_ID        = l.LICENSE_ID
+               AND l.START_TIMESTAMP     < fba.START_TIMESTAMP
+               AND l.END_TIMESTAMP       > fba.END_TIMESTAMP
+               AND l.LICENSE_TIER        = 'Free Trial'
+        WHERE fba.START_TIMESTAMP >= '{start}'
+          AND fba.START_TIMESTAMP <  DATEADD(day, 1, '{end}'::DATE)
+          AND fba.BUILD_TITLE     NOT LIKE 'Incredibuild sample project%%'
+    ),
+    cache_per_build AS (
+        SELECT COORDINATOR_ID, BUILD_ID,
+               MAX(CACHED_TASKS)                        AS max_cached_tasks,
+               MAX(CACHED_TASKS_TOTAL_PROCESSING_TIME)  AS cached_proc_time_us
+        FROM IB_DATALAKE.IB10.BUILD_CACHE_STAT
+        GROUP BY COORDINATOR_ID, BUILD_ID
+    )
+    SELECT
+        fb.BUILD_ID                                                            AS build_id,
+        fb.BUILD_TITLE                                                         AS build_title,
+        fb.LICENSE_ID                                                          AS license_key,
+        COALESCE(ft.EMAIL, 'N/A')                                              AS email,
+        ft.LICENSE_CREATED_TIMESTAMP                                           AS license_created,
+        fb.START_TIMESTAMP                                                     AS build_start,
+        fb.END_TIMESTAMP                                                       AS build_end,
+        GREATEST(0, DATEDIFF('second', fb.START_TIMESTAMP, fb.END_TIMESTAMP)) AS duration_sec,
+        CASE WHEN fb.NUMBER_OF_REMOTE_TASKS > 0
+                  OR fb.NUMBER_OF_CLOUD_TASKS > 0
+             THEN TRUE ELSE FALSE END                                          AS with_distribution,
+        CASE WHEN bcs.max_cached_tasks > 0
+             THEN TRUE ELSE FALSE END                                          AS with_cache,
+        CASE
+            WHEN (fb.NUMBER_OF_REMOTE_TASKS > 0 OR fb.NUMBER_OF_CLOUD_TASKS > 0
+                  OR bcs.max_cached_tasks > 0)
+                 AND DATEDIFF('second', fb.START_TIMESTAMP, fb.END_TIMESTAMP) > 0
+            THEN ROUND(
+                (fb.TOTAL_CPU_TIME + COALESCE(bcs.cached_proc_time_us, 0) / 1000000.0)
+                / DATEDIFF('second', fb.START_TIMESTAMP, fb.END_TIMESTAMP),
+                1
+            )
+            ELSE NULL
+        END                                                                    AS acceleration,
+        CASE
+            WHEN COALESCE(fb.NUMBER_OF_CORES_ON_INITIATOR_MACHINE, 0) > 0
+                 AND (fb.REMOTE_CPU_TIME > 0 OR fb.CLOUD_CPU_TIME > 0
+                      OR bcs.max_cached_tasks > 0)
+            THEN ROUND(
+                (COALESCE(fb.REMOTE_CPU_TIME, 0)
+                 + COALESCE(fb.CLOUD_CPU_TIME, 0)
+                 + COALESCE(bcs.cached_proc_time_us, 0) / 1000000.0)
+                / fb.NUMBER_OF_CORES_ON_INITIATOR_MACHINE,
+                1
+            )
+            ELSE NULL
+        END                                                                    AS acceleration_dori,
+        fb.TOTAL_CACHEABLE_TASKS                                               AS total_cacheable_tasks,
+        fb.AVG_ACTUAL_NEEDED_HELPERS                                           AS avg_actual_needed_helpers
+    FROM free_trial_builds fb
+    LEFT JOIN IB_DWH.IB10_DWH.DIM_FREE_TRIAL ft ON ft.LICENSE_ID = fb.LICENSE_ID
+    LEFT JOIN cache_per_build bcs
+           ON fb.COORDINATOR_ID = bcs.COORDINATOR_ID
+          AND fb.BUILD_ID       = bcs.BUILD_ID
+    ORDER BY fb.START_TIMESTAMP DESC
+"""
+
+
+# ---------------------------------------------------------------------------
+# App routes
+# ---------------------------------------------------------------------------
+
+def fetch_dashboard_data(conn, start: str, end: str) -> dict:
+    cur = conn.cursor()
+    cur.execute(BUILDS_QUERY.format(start=start, end=end))
+    rows = cur.fetchall()
+
+    df = pd.DataFrame(rows, columns=["build_date", "num_builds", "with_distribution", "with_cache", "new_agents"])
+    df["build_date"] = pd.to_datetime(df["build_date"])
+
+    all_days = pd.date_range(start=df["build_date"].min(), end=df["build_date"].max(), freq="D")
+    df = df.set_index("build_date").reindex(all_days, fill_value=0).reset_index()
+    df.rename(columns={"index": "build_date"}, inplace=True)
+
+    df["rolling_7d"]              = df["num_builds"].rolling(7, min_periods=1).mean().round(1)
+    df["cumulative_builds"]       = df["num_builds"].cumsum()
+    df["cumulative_agents"]       = df["new_agents"].cumsum()
+    df["cumulative_distribution"] = df["with_distribution"].cumsum()
+    df["cumulative_cache"]        = df["with_cache"].cumsum()
+
+    dates = df["build_date"].dt.strftime("%Y-%m-%d").tolist()
+
+    return {
+        "dates":                   dates,
+        "num_builds":              df["num_builds"].tolist(),
+        "with_distribution":       df["with_distribution"].tolist(),
+        "with_cache":              df["with_cache"].tolist(),
+        "new_agents":              df["new_agents"].tolist(),
+        "rolling_7d":              df["rolling_7d"].tolist(),
+        "cumulative_builds":       df["cumulative_builds"].tolist(),
+        "cumulative_agents":       df["cumulative_agents"].tolist(),
+        "cumulative_distribution": df["cumulative_distribution"].tolist(),
+        "cumulative_cache":        df["cumulative_cache"].tolist(),
+        "summary": {
+            "total_builds":       int(df["num_builds"].sum()),
+            "total_agents":       int(df["new_agents"].sum()),
+            "active_days":        int((df["num_builds"] > 0).sum()),
+            "peak_builds":        int(df["num_builds"].max()),
+            "peak_date":          df.loc[df["num_builds"].idxmax(), "build_date"].strftime("%b %d, %Y")
+                                  if df["num_builds"].max() > 0 else "N/A",
+            "total_distribution": int(df["with_distribution"].sum()),
+            "total_cache":        int(df["with_cache"].sum()),
+        },
+    }
+
+
+@app.route("/")
+@login_required
+def index():
+    return render_template("index.html", default_start=DEFAULT_START, default_end=DEFAULT_END)
+
+
+@app.route("/api/data")
+@login_required
+def api_data():
+    conn  = get_user_connection()
+    start = request.args.get("start", DEFAULT_START)
+    end   = request.args.get("end",   DEFAULT_END)
+    try:
+        return jsonify(fetch_dashboard_data(conn, start, end))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/grid")
+@login_required
+def api_grid():
+    conn  = get_user_connection()
+    start = request.args.get("start", DEFAULT_START)
+    end   = request.args.get("end",   DEFAULT_END)
+    try:
+        cur = conn.cursor()
+        cur.execute(GRID_QUERY.format(start=start, end=end))
+        rows = cur.fetchall()
+
+        def fmt_ts(ts):
+            return ts.strftime("%Y-%m-%d %H:%M:%S") if ts else ""
+
+        data = [
+            {
+                "build_id":                  str(r[0]),
+                "build_title":               r[1],
+                "license_key":               r[2],
+                "email":                     r[3],
+                "license_created":           fmt_ts(r[4]),
+                "build_start":               fmt_ts(r[5]),
+                "build_end":                 fmt_ts(r[6]),
+                "duration_sec":              int(r[7])   if r[7]  is not None else 0,
+                "with_distribution":         bool(r[8]),
+                "with_cache":                bool(r[9]),
+                "acceleration":              float(r[10]) if r[10] is not None else None,
+                "acceleration_dori":         float(r[11]) if r[11] is not None else None,
+                "total_cacheable_tasks":     int(r[12])  if r[12] is not None else None,
+                "avg_actual_needed_helpers": float(r[13]) if r[13] is not None else None,
+            }
+            for r in rows
+        ]
+        return jsonify({"rows": data, "total": len(data)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5050)

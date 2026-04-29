@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Incredibuild — Free Trial Dashboard</title>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <link  rel="stylesheet" href="https://cdn.datatables.net/2.0.7/css/dataTables.dataTables.min.css" />
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://cdn.datatables.net/2.0.7/js/dataTables.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1117;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #1a1d27;
+      border-bottom: 1px solid #2a2d3a;
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #fff;
+    }
+    header span {
+      font-size: 13px;
+      color: #8b8fa8;
+    }
+    header .logout {
+      margin-left: auto;
+      font-size: 13px;
+      color: #8b8fa8;
+      text-decoration: none;
+      padding: 5px 12px;
+      border: 1px solid #3a3d50;
+      border-radius: 6px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    header .logout:hover { color: #e0e0e0; border-color: #8b8fa8; }
+
+    .controls {
+      background: #1a1d27;
+      border-bottom: 1px solid #2a2d3a;
+      padding: 14px 32px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    .controls label {
+      font-size: 13px;
+      color: #8b8fa8;
+      margin-right: 6px;
+    }
+    .controls input[type="date"] {
+      background: #252836;
+      border: 1px solid #3a3d50;
+      border-radius: 6px;
+      color: #e0e0e0;
+      padding: 6px 10px;
+      font-size: 13px;
+      outline: none;
+      cursor: pointer;
+    }
+    .controls input[type="date"]:focus {
+      border-color: #5c6bc0;
+    }
+    .controls button {
+      background: #5c6bc0;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 7px 18px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .controls button:hover { background: #7986cb; }
+    .controls button:disabled { background: #3a3d50; cursor: default; }
+
+    .quick-ranges {
+      display: flex;
+      gap: 6px;
+      margin-left: auto;
+    }
+    .quick-ranges button {
+      background: #252836;
+      color: #8b8fa8;
+      border: 1px solid #3a3d50;
+      border-radius: 5px;
+      padding: 5px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .quick-ranges button:hover, .quick-ranges button.active {
+      background: #5c6bc0;
+      color: #fff;
+      border-color: #5c6bc0;
+    }
+
+    .summary-bar {
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid #2a2d3a;
+    }
+    .stat {
+      flex: 1;
+      padding: 16px 24px;
+      border-right: 1px solid #2a2d3a;
+      text-align: center;
+    }
+    .stat:last-child { border-right: none; }
+    .stat-value {
+      font-size: 26px;
+      font-weight: 700;
+      color: #fff;
+      line-height: 1;
+    }
+    .stat-label {
+      font-size: 11px;
+      color: #8b8fa8;
+      margin-top: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .stat-value.green  { color: #66bb6a; }
+    .stat-value.orange { color: #ffa726; }
+    .stat-value.purple { color: #ab47bc; }
+    .stat-value.teal   { color: #26c6da; }
+
+    .charts {
+      padding: 24px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .chart-card {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 10px;
+      padding: 20px;
+    }
+    .chart-card h2 {
+      font-size: 14px;
+      font-weight: 500;
+      color: #c0c4d8;
+      margin-bottom: 12px;
+    }
+
+    .loading-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15,17,23,0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+    .loading-overlay.visible {
+      opacity: 1;
+      pointer-events: all;
+    }
+    .spinner {
+      width: 40px; height: 40px;
+      border: 3px solid #2a2d3a;
+      border-top-color: #5c6bc0;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Raw data grid ─────────────────────────────── */
+    .grid-card {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 10px;
+      padding: 20px;
+    }
+    .grid-card h2 {
+      font-size: 14px;
+      font-weight: 500;
+      color: #c0c4d8;
+      margin-bottom: 14px;
+    }
+    .grid-meta {
+      font-size: 12px;
+      color: #8b8fa8;
+      margin-bottom: 12px;
+    }
+
+    /* DataTables dark overrides */
+    table.dataTable { border-collapse: collapse; width: 100% !important; }
+    table.dataTable thead th {
+      background: #252836;
+      color: #c0c4d8;
+      border-bottom: 1px solid #3a3d50 !important;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 10px 12px;
+      white-space: nowrap;
+    }
+    table.dataTable thead th:hover { background: #2e3145; cursor: pointer; }
+    table.dataTable tbody tr { background: transparent; }
+    table.dataTable tbody tr:nth-child(even) { background: rgba(255,255,255,0.025); }
+    table.dataTable tbody tr:hover { background: rgba(92,107,192,0.1) !important; }
+    table.dataTable tbody td {
+      color: #d0d4e8;
+      border-bottom: 1px solid #1e2130;
+      font-size: 12.5px;
+      padding: 9px 12px;
+    }
+    .dataTables_wrapper .dataTables_length,
+    .dataTables_wrapper .dataTables_filter,
+    .dataTables_wrapper .dataTables_info,
+    .dataTables_wrapper .dataTables_paginate {
+      color: #8b8fa8;
+      font-size: 12px;
+      margin: 8px 0;
+    }
+    .dataTables_wrapper .dataTables_filter input {
+      background: #252836;
+      border: 1px solid #3a3d50;
+      border-radius: 5px;
+      color: #e0e0e0;
+      padding: 5px 9px;
+      margin-left: 6px;
+      outline: none;
+    }
+    .dataTables_wrapper .dataTables_length select {
+      background: #252836;
+      border: 1px solid #3a3d50;
+      border-radius: 5px;
+      color: #e0e0e0;
+      padding: 3px 6px;
+    }
+    .dataTables_wrapper .dataTables_paginate .paginate_button {
+      color: #8b8fa8 !important;
+      border-radius: 4px;
+      padding: 3px 8px;
+    }
+    .dataTables_wrapper .dataTables_paginate .paginate_button.current,
+    .dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+      background: #5c6bc0 !important;
+      border-color: #5c6bc0 !important;
+      color: #fff !important;
+    }
+    .dataTables_wrapper .dataTables_paginate .paginate_button.disabled,
+    .dataTables_wrapper .dataTables_paginate .paginate_button.disabled:hover {
+      color: #3a3d50 !important;
+      background: transparent !important;
+      border-color: transparent !important;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-yes-dist  { background: rgba(171,71,188,0.2); color: #ce93d8; }
+    .badge-yes-cache { background: rgba(38,198,218,0.2); color: #80deea; }
+    .badge-no        { background: rgba(255,255,255,0.05); color: #6b7280; }
+
+    .grid-loading {
+      text-align: center;
+      padding: 40px;
+      color: #8b8fa8;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Incredibuild Free Trial Dashboard</h1>
+  <span>All builds on free trial licenses</span>
+  <a class="logout" href="/logout">Sign out</a>
+</header>
+
+<div class="controls">
+  <div>
+    <label for="start-date">From</label>
+    <input type="date" id="start-date" value="{{ default_start }}" />
+  </div>
+  <div>
+    <label for="end-date">To</label>
+    <input type="date" id="end-date" value="{{ default_end }}" />
+  </div>
+  <button id="apply-btn" onclick="loadData()">Apply</button>
+
+  <div class="quick-ranges">
+    <button onclick="setRange(7)">7d</button>
+    <button onclick="setRange(30)">30d</button>
+    <button onclick="setRange(90)">90d</button>
+    <button onclick="setRangeFromDate('2026-01-01')" class="active">YTD</button>
+    <button onclick="setRange(365)">1yr</button>
+    <button onclick="setRange(null)">All</button>
+  </div>
+</div>
+
+<div class="summary-bar">
+  <div class="stat">
+    <div class="stat-value" id="s-builds">—</div>
+    <div class="stat-label">Total Builds</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value green" id="s-agents">—</div>
+    <div class="stat-label">New Agents</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value" id="s-days">—</div>
+    <div class="stat-label">Active Days</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value purple" id="s-distribution">—</div>
+    <div class="stat-label">With Distribution</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value teal" id="s-cache">—</div>
+    <div class="stat-label">With Cache</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value orange" id="s-peak">—</div>
+    <div class="stat-label">Peak Day</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value" id="s-peak-date">—</div>
+    <div class="stat-label">Peak Date</div>
+  </div>
+</div>
+
+<div class="charts">
+  <div class="chart-card">
+    <h2>Daily Builds — Free Trials</h2>
+    <div id="chart-daily" style="height:380px"></div>
+  </div>
+  <div class="chart-card">
+    <h2>Cumulative Builds, Agents, Distribution &amp; Cache</h2>
+    <div id="chart-cumulative" style="height:280px"></div>
+  </div>
+</div>
+
+<div style="padding: 0 32px 32px">
+  <div class="grid-card">
+    <h2>Raw Build Data</h2>
+    <div class="grid-meta" id="grid-meta">Loading…</div>
+    <div id="grid-container">
+      <div class="grid-loading">Fetching data from Snowflake…</div>
+    </div>
+  </div>
+</div>
+
+<div class="loading-overlay" id="loading">
+  <div class="spinner"></div>
+</div>
+
+<script>
+const PLOTLY_CONFIG = { displayModeBar: false, responsive: true };
+
+const LAYOUT_BASE = {
+  paper_bgcolor: "transparent",
+  plot_bgcolor: "transparent",
+  font: { color: "#c0c4d8", size: 12 },
+  margin: { t: 10, r: 20, b: 40, l: 50 },
+  xaxis: {
+    gridcolor: "#2a2d3a", linecolor: "#2a2d3a", tickcolor: "#2a2d3a",
+    type: "date",
+  },
+  yaxis: { gridcolor: "#2a2d3a", linecolor: "#2a2d3a", tickcolor: "#2a2d3a", rangemode: "tozero" },
+  legend: { orientation: "h", y: 1.12, x: 0.5, xanchor: "center", bgcolor: "transparent" },
+  hovermode: "x unified",
+};
+
+function showLoading(on) {
+  document.getElementById("loading").classList.toggle("visible", on);
+  document.getElementById("apply-btn").disabled = on;
+}
+
+function setRange(days) {
+  document.querySelectorAll(".quick-ranges button").forEach(b => b.classList.remove("active"));
+  event.target.classList.add("active");
+  const end = new Date();
+  document.getElementById("end-date").value = end.toISOString().slice(0, 10);
+  if (days === null) {
+    document.getElementById("start-date").value = "2024-01-01";
+  } else {
+    const start = new Date(end);
+    start.setDate(start.getDate() - days);
+    document.getElementById("start-date").value = start.toISOString().slice(0, 10);
+  }
+  loadData();
+}
+
+function setRangeFromDate(dateStr) {
+  document.querySelectorAll(".quick-ranges button").forEach(b => b.classList.remove("active"));
+  event.target.classList.add("active");
+  document.getElementById("start-date").value = dateStr;
+  document.getElementById("end-date").value = new Date().toISOString().slice(0, 10);
+  loadData();
+}
+
+function renderSummary(s) {
+  document.getElementById("s-builds").textContent       = s.total_builds.toLocaleString();
+  document.getElementById("s-agents").textContent       = s.total_agents.toLocaleString();
+  document.getElementById("s-days").textContent         = s.active_days.toLocaleString();
+  document.getElementById("s-distribution").textContent = s.total_distribution.toLocaleString();
+  document.getElementById("s-cache").textContent        = s.total_cache.toLocaleString();
+  document.getElementById("s-peak").textContent         = s.peak_builds.toLocaleString();
+  document.getElementById("s-peak-date").textContent    = s.peak_date;
+}
+
+function renderCharts(d) {
+  // ── Chart 1: Daily builds + distribution + cache + new agents + 7d avg ──
+  Plotly.react("chart-daily", [
+    {
+      x: d.dates, y: d.num_builds,
+      type: "bar", name: "Total builds",
+      marker: { color: "#5c6bc0", opacity: 0.75 },
+      hovertemplate: "%{y} total<extra></extra>",
+    },
+    {
+      x: d.dates, y: d.with_distribution,
+      type: "bar", name: "With distribution",
+      marker: { color: "#ab47bc", opacity: 0.85 },
+      hovertemplate: "%{y} with distribution<extra></extra>",
+    },
+    {
+      x: d.dates, y: d.with_cache,
+      type: "bar", name: "With cache",
+      marker: { color: "#26c6da", opacity: 0.85 },
+      hovertemplate: "%{y} with cache<extra></extra>",
+    },
+    {
+      x: d.dates, y: d.new_agents,
+      type: "bar", name: "New agents",
+      marker: { color: "#66bb6a", opacity: 0.9 },
+      hovertemplate: "%{y} new agents<extra></extra>",
+    },
+    {
+      x: d.dates, y: d.rolling_7d,
+      type: "scatter", mode: "lines", name: "7-day avg (builds)",
+      line: { color: "#ffa726", width: 2 },
+      hovertemplate: "%{y:.1f} avg<extra></extra>",
+    },
+  ], {
+    ...LAYOUT_BASE,
+    barmode: "overlay",
+    yaxis: { ...LAYOUT_BASE.yaxis, title: "Count" },
+  }, PLOTLY_CONFIG);
+
+  // ── Chart 2: Cumulative builds + agents + distribution + cache ──
+  Plotly.react("chart-cumulative", [
+    {
+      x: d.dates, y: d.cumulative_builds,
+      type: "scatter", mode: "lines", name: "Cumul. builds",
+      fill: "tozeroy",
+      line: { color: "#5c6bc0", width: 2 },
+      fillcolor: "rgba(92,107,192,0.10)",
+      hovertemplate: "%{y} builds<extra></extra>",
+    },
+    {
+      x: d.dates, y: d.cumulative_distribution,
+      type: "scatter", mode: "lines", name: "Cumul. distribution",
+      line: { color: "#ab47bc", width: 2, dash: "dash" },
+      hovertemplate: "%{y} w/ distribution<extra></extra>",
+    },
+    {
+      x: d.dates, y: d.cumulative_cache,
+      type: "scatter", mode: "lines", name: "Cumul. cache",
+      line: { color: "#26c6da", width: 2, dash: "dash" },
+      hovertemplate: "%{y} w/ cache<extra></extra>",
+    },
+    {
+      x: d.dates, y: d.cumulative_agents,
+      type: "scatter", mode: "lines", name: "Cumul. agents",
+      line: { color: "#66bb6a", width: 2, dash: "dot" },
+      yaxis: "y2",
+      hovertemplate: "%{y} agents<extra></extra>",
+    },
+  ], {
+    ...LAYOUT_BASE,
+    yaxis:  { ...LAYOUT_BASE.yaxis, title: "Builds" },
+    yaxis2: {
+      title: "Agents", overlaying: "y", side: "right",
+      gridcolor: "transparent", linecolor: "#2a2d3a", tickcolor: "#2a2d3a",
+      rangemode: "tozero", color: "#66bb6a",
+    },
+  }, PLOTLY_CONFIG);
+}
+
+// ── Grid ───────────────────────────────────────────────────────────────────
+let dtInstance = null;
+
+function fmtDuration(sec) {
+  if (!sec) return "0s";
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function badge(flag, trueClass, trueLabel) {
+  return flag
+    ? `<span class="badge ${trueClass}">${trueLabel}</span>`
+    : `<span class="badge badge-no">No</span>`;
+}
+
+// Initial load
+async function loadData() {
+  const start = document.getElementById("start-date").value;
+  const end   = document.getElementById("end-date").value;
+  if (!start || !end) return;
+
+  showLoading(true);
+  try {
+    const [chartRes, gridRes] = await Promise.all([
+      fetch(`/api/data?start=${start}&end=${end}`),
+      fetch(`/api/grid?start=${start}&end=${end}`),
+    ]);
+    const [chartData, gridData] = await Promise.all([chartRes.json(), gridRes.json()]);
+    if (chartData.error) { alert("Chart error: " + chartData.error); return; }
+    renderCharts(chartData);
+    renderSummary(chartData.summary);
+    if (!gridData.error) renderGrid(gridData);
+    else document.getElementById("grid-meta").textContent = "Grid error: " + gridData.error;
+  } finally {
+    showLoading(false);
+  }
+}
+
+function renderGrid(d) {
+  document.getElementById("grid-meta").textContent =
+    `${d.total.toLocaleString()} builds`;
+
+  if (dtInstance) { dtInstance.destroy(); dtInstance = null; }
+
+  const tableHtml = `
+    <table id="builds-table" style="width:100%">
+      <thead><tr>
+        <th>Build ID</th>
+        <th>Build Title</th>
+        <th>License Key</th>
+        <th>Email</th>
+        <th>License Created</th>
+        <th>Start Time</th>
+        <th>End Time</th>
+        <th>Duration</th>
+        <th>Distribution</th>
+        <th>Cache</th>
+        <th>Acceleration</th>
+        <th>Acceleration Dori</th>
+        <th>Cacheable Tasks</th>
+        <th>Avg Needed Helpers</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>`;
+  document.getElementById("grid-container").innerHTML = tableHtml;
+
+  dtInstance = $("#builds-table").DataTable({
+    data: d.rows,
+    pageLength: 25,
+    order: [[4, "desc"]],
+    columns: [
+      { data: "build_id",          render: v => `<span style="font-family:monospace;font-size:11px;color:#8b8fa8">${v}</span>` },
+      { data: "build_title" },
+      { data: "license_key",       render: v => `<span style="font-family:monospace;font-size:12px">${v}</span>` },
+      { data: "email" },
+      { data: "license_created" },
+      { data: "build_start" },
+      { data: "build_end" },
+      { data: "duration_sec",      type: "num", render: (v, type) => type === "display" ? fmtDuration(v) : +v },
+      { data: "with_distribution", render: v => badge(v, "badge-yes-dist",  "Yes") },
+      { data: "with_cache",        render: v => badge(v, "badge-yes-cache", "Yes") },
+      { data: "acceleration",      type: "num", render: (v, type) => {
+          if (v === null || v === undefined) return type === "display" ? "—" : -1;
+          return type === "display"
+            ? `<span style="font-weight:600;color:#ffa726">${v.toFixed(1)}×</span>`
+            : v;
+      }},
+      { data: "acceleration_dori",         type: "num", render: (v, type, row) => {
+          if (v === null || v === undefined) return type === "display" ? "—" : -1;
+          if (type !== "display") return v;
+          const pct = (row.duration_sec > 0 || v > 0)
+            ? (v / (row.duration_sec + v) * 100).toFixed(1)
+            : null;
+          const pctStr = pct !== null ? ` <span style="color:#b0bec5">(${pct}%)</span>` : "";
+          return `<span style="font-weight:600;color:#ce93d8">${v.toFixed(1)}s</span>${pctStr}`;
+      }},
+      { data: "total_cacheable_tasks",     type: "num", render: (v, type) =>
+          v === null || v === undefined ? (type === "display" ? "—" : -1) : v },
+      { data: "avg_actual_needed_helpers", type: "num", render: (v, type) =>
+          v === null || v === undefined ? (type === "display" ? "—" : -1) : (type === "display" ? v.toFixed(1) : v) },
+    ],
+    language: {
+      search: "Filter:",
+      lengthMenu: "Show _MENU_ rows",
+      info: "Showing _START_–_END_ of _TOTAL_",
+    },
+  });
+}
+</script>
+</body>
+</html>
