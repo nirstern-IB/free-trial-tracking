@@ -284,6 +284,50 @@
       color: #8b8fa8;
       font-size: 13px;
     }
+
+    /* ── Filter banner ─────────────────────────────── */
+    .filter-banner {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      background: rgba(255, 167, 38, 0.1);
+      border-bottom: 1px solid rgba(255, 167, 38, 0.3);
+      padding: 9px 32px;
+      font-size: 13px;
+      color: #ffa726;
+    }
+    .filter-banner .filter-icon { font-size: 14px; }
+    .filter-banner strong { color: #ffcc80; }
+    .filter-banner .clear-btn {
+      margin-left: auto;
+      background: transparent;
+      border: 1px solid rgba(255, 167, 38, 0.5);
+      border-radius: 5px;
+      color: #ffa726;
+      padding: 3px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .filter-banner .clear-btn:hover {
+      background: rgba(255, 167, 38, 0.15);
+      border-color: #ffa726;
+    }
+
+    /* ── Clickable cells ───────────────────────────── */
+    .filterable {
+      cursor: pointer;
+      color: #29b5e8;
+      text-decoration: underline;
+      text-decoration-style: dotted;
+      text-underline-offset: 3px;
+      transition: color 0.12s;
+    }
+    .filterable:hover { color: #7dd3f0; }
+    .filterable.active-filter {
+      color: #ffa726;
+      text-decoration-color: #ffa726;
+    }
   </style>
 </head>
 <body>
@@ -313,6 +357,12 @@
     <button onclick="setRange(365)">1yr</button>
     <button onclick="setRange(null)">All</button>
   </div>
+</div>
+
+<div class="filter-banner" id="filter-banner">
+  <span class="filter-icon">&#9740;</span>
+  <span>Filtered by <strong id="filter-label"></strong></span>
+  <button class="clear-btn" onclick="clearFilter()">&#x2715; Clear filter</button>
 </div>
 
 <div class="summary-bar">
@@ -373,6 +423,37 @@
 
 <script>
 const PLOTLY_CONFIG = { displayModeBar: false, responsive: true };
+
+// ── Filter state ───────────────────────────────────────────────────────────
+let activeFilter = null; // { type: 'email'|'license_key', value: '...' }
+
+function applyFilter(type, value) {
+  activeFilter = { type, value };
+  updateFilterBanner();
+  loadData();
+}
+
+function clearFilter() {
+  activeFilter = null;
+  updateFilterBanner();
+  loadData();
+}
+
+function updateFilterBanner() {
+  const banner = document.getElementById("filter-banner");
+  if (activeFilter) {
+    const label = activeFilter.type === "email" ? "Email" : "License Key";
+    document.getElementById("filter-label").textContent = `${label}: ${activeFilter.value}`;
+    banner.style.display = "flex";
+  } else {
+    banner.style.display = "none";
+  }
+}
+
+function filterParams() {
+  if (!activeFilter) return "";
+  return `&filter_type=${encodeURIComponent(activeFilter.type)}&filter_value=${encodeURIComponent(activeFilter.value)}`;
+}
 
 const LAYOUT_BASE = {
   paper_bgcolor: "transparent",
@@ -532,9 +613,10 @@ async function loadData() {
 
   showLoading(true);
   try {
+    const fp = filterParams();
     const [chartRes, gridRes] = await Promise.all([
-      fetch(`/api/data?start=${start}&end=${end}`),
-      fetch(`/api/grid?start=${start}&end=${end}`),
+      fetch(`/api/data?start=${start}&end=${end}${fp}`),
+      fetch(`/api/grid?start=${start}&end=${end}${fp}`),
     ]);
     const [chartData, gridData] = await Promise.all([chartRes.json(), gridRes.json()]);
     if (chartData.error) { alert("Chart error: " + chartData.error); return; }
@@ -582,8 +664,16 @@ function renderGrid(d) {
     columns: [
       { data: "build_id",          render: v => `<span style="font-family:monospace;font-size:11px;color:#8b8fa8">${v}</span>` },
       { data: "build_title" },
-      { data: "license_key",       render: v => `<span style="font-family:monospace;font-size:12px">${v}</span>` },
-      { data: "email" },
+      { data: "license_key", render: (v, type) => {
+          if (type !== "display") return v;
+          const active = activeFilter?.type === "license_key" && activeFilter?.value === v ? " active-filter" : "";
+          return `<span class="filterable${active}" style="font-family:monospace;font-size:12px">${v}</span>`;
+      }},
+      { data: "email", render: (v, type) => {
+          if (type !== "display" || v === "N/A") return v;
+          const active = activeFilter?.type === "email" && activeFilter?.value === v ? " active-filter" : "";
+          return `<span class="filterable${active}">${v}</span>`;
+      }},
       { data: "license_created" },
       { data: "build_start" },
       { data: "build_end" },
@@ -615,7 +705,14 @@ function renderGrid(d) {
       lengthMenu: "Show _MENU_ rows",
       info: "Showing _START_–_END_ of _TOTAL_",
     },
+    createdRow(row, data) {
+      $("td:eq(2)", row).css("cursor", "pointer").on("click", () => applyFilter("license_key", data.license_key));
+      if (data.email !== "N/A") {
+        $("td:eq(3)", row).css("cursor", "pointer").on("click", () => applyFilter("email", data.email));
+      }
+    },
   });
+
 }
 </script>
 </body>

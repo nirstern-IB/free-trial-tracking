@@ -1,4 +1,5 @@
 import os
+import re
 import secrets
 from datetime import date
 from functools import wraps
@@ -101,6 +102,21 @@ def logout():
 # Queries
 # ---------------------------------------------------------------------------
 
+def build_filter_clause(filter_type: str | None, filter_value: str | None) -> str:
+    if not filter_type or not filter_value:
+        return ""
+    safe = filter_value.replace("'", "''")
+    if filter_type == "license_key":
+        return f"AND fba.LICENSE_ID = '{safe}'"
+    if filter_type == "email":
+        return (
+            f"AND fba.LICENSE_ID IN ("
+            f"SELECT LICENSE_ID FROM IB_DWH.IB10_DWH.DIM_FREE_TRIAL WHERE EMAIL = '{safe}'"
+            f")"
+        )
+    return ""
+
+
 BUILDS_QUERY = """
     WITH free_trial_builds AS (
         SELECT DISTINCT fba.BUILD_ID, fba.COORDINATOR_ID, fba.LICENSE_ID,
@@ -114,6 +130,7 @@ BUILDS_QUERY = """
         WHERE fba.START_TIMESTAMP >= '{start}'
           AND fba.START_TIMESTAMP <  DATEADD(day, 1, '{end}'::DATE)
           AND fba.BUILD_TITLE     NOT LIKE 'Incredibuild sample project%%'
+          {filter_clause}
     ),
     cache_per_build AS (
         SELECT COORDINATOR_ID, BUILD_ID, MAX(CACHED_TASKS) AS max_cached_tasks
@@ -176,6 +193,7 @@ GRID_QUERY = """
         WHERE fba.START_TIMESTAMP >= '{start}'
           AND fba.START_TIMESTAMP <  DATEADD(day, 1, '{end}'::DATE)
           AND fba.BUILD_TITLE     NOT LIKE 'Incredibuild sample project%%'
+          {filter_clause}
     ),
     cache_per_build AS (
         SELECT COORDINATOR_ID, BUILD_ID,
@@ -237,9 +255,9 @@ GRID_QUERY = """
 # App routes
 # ---------------------------------------------------------------------------
 
-def fetch_dashboard_data(conn, start: str, end: str) -> dict:
+def fetch_dashboard_data(conn, start: str, end: str, filter_clause: str = "") -> dict:
     cur = conn.cursor()
-    cur.execute(BUILDS_QUERY.format(start=start, end=end))
+    cur.execute(BUILDS_QUERY.format(start=start, end=end, filter_clause=filter_clause))
     rows = cur.fetchall()
 
     df = pd.DataFrame(rows, columns=["build_date", "num_builds", "with_distribution", "with_cache", "new_agents"])
@@ -290,11 +308,14 @@ def index():
 @app.route("/api/data")
 @login_required
 def api_data():
-    conn  = get_user_connection()
-    start = request.args.get("start", DEFAULT_START)
-    end   = request.args.get("end",   DEFAULT_END)
+    conn         = get_user_connection()
+    start        = request.args.get("start",        DEFAULT_START)
+    end          = request.args.get("end",           DEFAULT_END)
+    filter_type  = request.args.get("filter_type",  "")
+    filter_value = request.args.get("filter_value", "")
+    fc = build_filter_clause(filter_type, filter_value)
     try:
-        return jsonify(fetch_dashboard_data(conn, start, end))
+        return jsonify(fetch_dashboard_data(conn, start, end, fc))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -302,12 +323,15 @@ def api_data():
 @app.route("/api/grid")
 @login_required
 def api_grid():
-    conn  = get_user_connection()
-    start = request.args.get("start", DEFAULT_START)
-    end   = request.args.get("end",   DEFAULT_END)
+    conn         = get_user_connection()
+    start        = request.args.get("start",        DEFAULT_START)
+    end          = request.args.get("end",           DEFAULT_END)
+    filter_type  = request.args.get("filter_type",  "")
+    filter_value = request.args.get("filter_value", "")
+    fc = build_filter_clause(filter_type, filter_value)
     try:
         cur = conn.cursor()
-        cur.execute(GRID_QUERY.format(start=start, end=end))
+        cur.execute(GRID_QUERY.format(start=start, end=end, filter_clause=fc))
         rows = cur.fetchall()
 
         def fmt_ts(ts):
