@@ -328,6 +328,26 @@
       color: #ffa726;
       text-decoration-color: #ffa726;
     }
+
+    /* ── New-agents toggle ─────────────────────────── */
+    .toggle-btn {
+      background: #252836;
+      color: #8b8fa8;
+      border: 1px solid #3a3d50;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .toggle-btn:hover { border-color: #66bb6a; color: #66bb6a; }
+    .toggle-btn.active {
+      background: rgba(102, 187, 106, 0.12);
+      border-color: #66bb6a;
+      color: #66bb6a;
+      font-weight: 500;
+    }
   </style>
 </head>
 <body>
@@ -348,6 +368,14 @@
     <input type="date" id="end-date" value="{{ default_end }}" />
   </div>
   <button id="apply-btn" onclick="loadData()">Apply</button>
+
+  <button class="toggle-btn" id="new-agents-btn" onclick="toggleNewAgentsOnly()" title="Show only agents whose first-ever build falls in the selected date range">
+    New agents only
+  </button>
+
+  <button class="toggle-btn" id="hide-unreal-btn" onclick="toggleHideUnreal()" title="Exclude builds with 'Unreal' in the title">
+    Hide Unreal builds
+  </button>
 
   <div class="quick-ranges">
     <button onclick="setRange(7)">7d</button>
@@ -409,7 +437,12 @@
 
 <div style="padding: 0 32px 32px">
   <div class="grid-card">
-    <h2>Raw Build Data</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+      <h2 style="margin-bottom:0">Raw Build Data</h2>
+      <button class="toggle-btn" onclick="exportExcel()" style="font-size:12px;padding:5px 14px">
+        &#8681; Export to Excel
+      </button>
+    </div>
     <div class="grid-meta" id="grid-meta">Loading…</div>
     <div id="grid-container">
       <div class="grid-loading">Fetching data from Snowflake…</div>
@@ -426,6 +459,37 @@ const PLOTLY_CONFIG = { displayModeBar: false, responsive: true };
 
 // ── Filter state ───────────────────────────────────────────────────────────
 let activeFilter = null; // { type: 'email'|'license_key', value: '...' }
+let newAgentsOnly = false;
+let hideUnreal = false;
+
+function toggleNewAgentsOnly() {
+  newAgentsOnly = !newAgentsOnly;
+  document.getElementById("new-agents-btn").classList.toggle("active", newAgentsOnly);
+  loadData();
+}
+
+function toggleHideUnreal() {
+  hideUnreal = !hideUnreal;
+  document.getElementById("hide-unreal-btn").classList.toggle("active", hideUnreal);
+  loadData();
+}
+
+function newAgentsParam() {
+  return newAgentsOnly ? "&new_agents_only=1" : "";
+}
+
+function hideUnrealParam() {
+  return hideUnreal ? "&hide_unreal=1" : "";
+}
+
+function exportExcel() {
+  const start = document.getElementById("start-date").value;
+  const end   = document.getElementById("end-date").value;
+  const fp    = filterParams();
+  const nao   = newAgentsParam();
+  const hu    = hideUnrealParam();
+  window.location.href = `/api/export?start=${start}&end=${end}${fp}${nao}${hu}`;
+}
 
 function applyFilter(type, value) {
   activeFilter = { type, value };
@@ -614,9 +678,11 @@ async function loadData() {
   showLoading(true);
   try {
     const fp = filterParams();
+    const nao = newAgentsParam();
+    const hu = hideUnrealParam();
     const [chartRes, gridRes] = await Promise.all([
-      fetch(`/api/data?start=${start}&end=${end}${fp}`),
-      fetch(`/api/grid?start=${start}&end=${end}${fp}`),
+      fetch(`/api/data?start=${start}&end=${end}${fp}${nao}${hu}`),
+      fetch(`/api/grid?start=${start}&end=${end}${fp}${nao}${hu}`),
     ]);
     const [chartData, gridData] = await Promise.all([chartRes.json(), gridRes.json()]);
     if (chartData.error) { alert("Chart error: " + chartData.error); return; }

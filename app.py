@@ -6,7 +6,8 @@ from functools import wraps
 
 import snowflake.connector
 import pandas as pd
-from flask import Flask, render_template, jsonify, request, redirect, url_for, session
+import io
+from flask import Flask, render_template, jsonify, request, redirect, url_for, session, send_file
 
 SNOWFLAKE_ACCOUNT = "lalywxa-ja51028"
 
@@ -117,6 +118,24 @@ def build_filter_clause(filter_type: str | None, filter_value: str | None) -> st
     return ""
 
 
+UNREAL_FILTER_CLAUSE = "AND fba.BUILD_TITLE NOT ILIKE '%Unreal%' AND fba.BUILD_TITLE != 'XGETasks'"
+
+
+def build_new_agents_only_clause(start: str, end: str) -> str:
+    return (
+        f"AND fba.LICENSE_ID IN ("
+        f"SELECT fba2.LICENSE_ID"
+        f" FROM IB_DWH.IB10_DWH.FACT_BUILD_ACTIVITY fba2"
+        f" INNER JOIN IB_DWH.IB10_DWH.DIM_LICENSE l2"
+        f"         ON fba2.LICENSE_ID = l2.LICENSE_ID AND l2.LICENSE_TIER = 'Free Trial'"
+        f" WHERE fba2.BUILD_TITLE NOT LIKE 'Incredibuild sample project%%'"
+        f" GROUP BY fba2.LICENSE_ID"
+        f" HAVING MIN(fba2.START_TIMESTAMP) >= '{start}'"
+        f"    AND MIN(fba2.START_TIMESTAMP) <  DATEADD(day, 1, '{end}'::DATE)"
+        f")"
+    )
+
+
 BUILDS_QUERY = """
     WITH free_trial_builds AS (
         SELECT DISTINCT fba.BUILD_ID, fba.COORDINATOR_ID, fba.LICENSE_ID,
@@ -151,13 +170,23 @@ BUILDS_QUERY = """
         GROUP BY 1
     ),
     new_agents AS (
-        SELECT first_date AS build_date, COUNT(*) AS new_agent_count
+        SELECT DATE_TRUNC('day', gf.global_first)::DATE AS build_date,
+               COUNT(*) AS new_agent_count
         FROM (
-            SELECT LICENSE_ID,
-                   MIN(DATE_TRUNC('day', START_TIMESTAMP)::DATE) AS first_date
-            FROM free_trial_builds
-            GROUP BY LICENSE_ID
-        )
+            SELECT fb.LICENSE_ID
+            FROM free_trial_builds fb
+            GROUP BY fb.LICENSE_ID
+        ) fb_licenses
+        JOIN (
+            SELECT fba2.LICENSE_ID, MIN(fba2.START_TIMESTAMP) AS global_first
+            FROM IB_DWH.IB10_DWH.FACT_BUILD_ACTIVITY fba2
+            INNER JOIN IB_DWH.IB10_DWH.DIM_LICENSE l2
+                    ON fba2.LICENSE_ID = l2.LICENSE_ID AND l2.LICENSE_TIER = 'Free Trial'
+            WHERE fba2.BUILD_TITLE NOT LIKE 'Incredibuild sample project%%'
+            GROUP BY fba2.LICENSE_ID
+        ) gf ON gf.LICENSE_ID = fb_licenses.LICENSE_ID
+        WHERE gf.global_first >= '{start}'
+          AND gf.global_first <  DATEADD(day, 1, '{end}'::DATE)
         GROUP BY 1
     )
     SELECT
@@ -308,12 +337,18 @@ def index():
 @app.route("/api/data")
 @login_required
 def api_data():
-    conn         = get_user_connection()
-    start        = request.args.get("start",        DEFAULT_START)
-    end          = request.args.get("end",           DEFAULT_END)
-    filter_type  = request.args.get("filter_type",  "")
-    filter_value = request.args.get("filter_value", "")
+    conn             = get_user_connection()
+    start            = request.args.get("start",            DEFAULT_START)
+    end              = request.args.get("end",              DEFAULT_END)
+    filter_type      = request.args.get("filter_type",      "")
+    filter_value     = request.args.get("filter_value",     "")
+    new_agents_only  = request.args.get("new_agents_only",  "")
+    hide_unreal      = request.args.get("hide_unreal",      "")
     fc = build_filter_clause(filter_type, filter_value)
+    if new_agents_only == "1":
+        fc += " " + build_new_agents_only_clause(start, end)
+    if hide_unreal == "1":
+        fc += " " + UNREAL_FILTER_CLAUSE
     try:
         return jsonify(fetch_dashboard_data(conn, start, end, fc))
     except Exception as e:
@@ -323,12 +358,18 @@ def api_data():
 @app.route("/api/grid")
 @login_required
 def api_grid():
-    conn         = get_user_connection()
-    start        = request.args.get("start",        DEFAULT_START)
-    end          = request.args.get("end",           DEFAULT_END)
-    filter_type  = request.args.get("filter_type",  "")
-    filter_value = request.args.get("filter_value", "")
+    conn             = get_user_connection()
+    start            = request.args.get("start",            DEFAULT_START)
+    end              = request.args.get("end",              DEFAULT_END)
+    filter_type      = request.args.get("filter_type",      "")
+    filter_value     = request.args.get("filter_value",     "")
+    new_agents_only  = request.args.get("new_agents_only",  "")
+    hide_unreal      = request.args.get("hide_unreal",      "")
     fc = build_filter_clause(filter_type, filter_value)
+    if new_agents_only == "1":
+        fc += " " + build_new_agents_only_clause(start, end)
+    if hide_unreal == "1":
+        fc += " " + UNREAL_FILTER_CLAUSE
     try:
         cur = conn.cursor()
         cur.execute(GRID_QUERY.format(start=start, end=end, filter_clause=fc))
@@ -357,6 +398,58 @@ def api_grid():
             for r in rows
         ]
         return jsonify({"rows": data, "total": len(data)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/export")
+@login_required
+def api_export():
+    conn             = get_user_connection()
+    start            = request.args.get("start",            DEFAULT_START)
+    end              = request.args.get("end",              DEFAULT_END)
+    filter_type      = request.args.get("filter_type",      "")
+    filter_value     = request.args.get("filter_value",     "")
+    new_agents_only  = request.args.get("new_agents_only",  "")
+    hide_unreal      = request.args.get("hide_unreal",      "")
+    fc = build_filter_clause(filter_type, filter_value)
+    if new_agents_only == "1":
+        fc += " " + build_new_agents_only_clause(start, end)
+    if hide_unreal == "1":
+        fc += " " + UNREAL_FILTER_CLAUSE
+    try:
+        cur = conn.cursor()
+        cur.execute(GRID_QUERY.format(start=start, end=end, filter_clause=fc))
+        rows = cur.fetchall()
+
+        def fmt_ts(ts):
+            return ts.strftime("%Y-%m-%d %H:%M:%S") if ts else ""
+
+        df = pd.DataFrame([{
+            "Build ID":                  str(r[0]),
+            "Build Title":               r[1],
+            "License Key":               r[2],
+            "Email":                     r[3],
+            "License Created":           fmt_ts(r[4]),
+            "Build Start":               fmt_ts(r[5]),
+            "Build End":                 fmt_ts(r[6]),
+            "Duration (sec)":            int(r[7])    if r[7]  is not None else 0,
+            "With Distribution":         bool(r[8]),
+            "With Cache":                bool(r[9]),
+            "Acceleration":              float(r[10]) if r[10] is not None else None,
+            "Acceleration (Dori)":       float(r[11]) if r[11] is not None else None,
+            "Total Cacheable Tasks":     int(r[12])   if r[12] is not None else None,
+            "Avg Needed Helpers":        float(r[13]) if r[13] is not None else None,
+        } for r in rows])
+
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Builds")
+        buf.seek(0)
+
+        filename = f"free_trial_builds_{start}_to_{end}.xlsx"
+        return send_file(buf, as_attachment=True, download_name=filename,
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
