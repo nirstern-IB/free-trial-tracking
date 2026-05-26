@@ -276,6 +276,7 @@
     }
     .badge-yes-dist  { background: rgba(171,71,188,0.2); color: #ce93d8; }
     .badge-yes-cache { background: rgba(38,198,218,0.2); color: #80deea; }
+    .badge-no-hits   { background: rgba(255,167,38,0.15); color: #ffa726; }
     .badge-no        { background: rgba(255,255,255,0.05); color: #6b7280; }
 
     .grid-loading {
@@ -324,6 +325,116 @@
       transition: color 0.12s;
     }
     .filterable:hover { color: #7dd3f0; }
+
+    /* ── Copy icon ─────────────────────────────────── */
+    .copy-icon {
+      font-size: 13px;
+      color: #3a3d50;
+      cursor: pointer;
+      transition: color 0.15s;
+      user-select: none;
+    }
+    .copy-icon:hover { color: #8b8fa8; }
+
+    /* ── Detail modal ──────────────────────────────── */
+    .detail-modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+    }
+    .detail-modal-backdrop.open { display: flex; }
+    .detail-modal {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 10px;
+      width: 820px;
+      max-width: 95vw;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .detail-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid #2a2d3a;
+    }
+    .detail-modal-header h3 { font-size: 14px; font-weight: 600; color: #fff; }
+    .detail-modal-header span { font-size: 12px; color: #8b8fa8; margin-left: 10px; }
+    .detail-modal-close {
+      background: none;
+      border: none;
+      color: #8b8fa8;
+      font-size: 18px;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .detail-modal-close:hover { color: #e0e0e0; }
+    .detail-modal-body {
+      overflow-y: auto;
+      padding: 16px 20px;
+    }
+    .detail-kv-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .detail-kv-table tr:nth-child(even) td { background: rgba(255,255,255,0.03); }
+    .detail-kv-table td {
+      padding: 5px 8px;
+      border-bottom: 1px solid #2a2d3a;
+      vertical-align: top;
+    }
+    .detail-kv-table td:first-child {
+      color: #8b8fa8;
+      width: 240px;
+      white-space: nowrap;
+      font-weight: 500;
+    }
+    .detail-kv-table td:last-child { color: #e0e0e0; word-break: break-all; }
+    .detail-rows-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+    .detail-rows-table th {
+      background: #252836;
+      color: #8b8fa8;
+      padding: 6px 8px;
+      text-align: left;
+      white-space: nowrap;
+      border-bottom: 1px solid #2a2d3a;
+    }
+    .detail-rows-table td {
+      padding: 5px 8px;
+      border-bottom: 1px solid #1e2130;
+      color: #e0e0e0;
+      white-space: nowrap;
+    }
+    .detail-rows-table tr:hover td { background: rgba(255,255,255,0.04); }
+    .detail-empty {
+      text-align: center;
+      color: #8b8fa8;
+      padding: 40px 0;
+      font-size: 13px;
+    }
+    .build-id-link {
+      font-family: monospace;
+      font-size: 11px;
+      color: #29b5e8;
+      cursor: pointer;
+      text-decoration: underline;
+      text-decoration-style: dotted;
+      text-underline-offset: 3px;
+    }
+    .build-id-link:hover { color: #7dd3f0; }
+    .cache-badge-link { cursor: pointer; }
+    .cache-badge-link:hover { opacity: 0.8; }
     .filterable.active-filter {
       color: #ffa726;
       text-decoration-color: #ffa726;
@@ -450,6 +561,16 @@
   </div>
 </div>
 
+<div class="detail-modal-backdrop" id="detail-modal-backdrop" onclick="closeDetailModal(event)">
+  <div class="detail-modal">
+    <div class="detail-modal-header">
+      <div><h3 id="detail-modal-title"></h3><span id="detail-modal-subtitle"></span></div>
+      <button class="detail-modal-close" onclick="closeDetailModal()">&#x2715;</button>
+    </div>
+    <div class="detail-modal-body" id="detail-modal-body"></div>
+  </div>
+</div>
+
 <div class="loading-overlay" id="loading">
   <div class="spinner"></div>
 </div>
@@ -482,6 +603,68 @@ function hideUnrealParam() {
   return hideUnreal ? "&hide_unreal=1" : "";
 }
 
+// ── Build detail modal ─────────────────────────────────────────────────────
+function closeDetailModal(e) {
+  if (e && e.target !== document.getElementById("detail-modal-backdrop")) return;
+  document.getElementById("detail-modal-backdrop").classList.remove("open");
+}
+
+function openDetailModal(title, subtitle, bodyHtml) {
+  document.getElementById("detail-modal-title").textContent = title;
+  document.getElementById("detail-modal-subtitle").textContent = subtitle;
+  document.getElementById("detail-modal-body").innerHTML = bodyHtml;
+  document.getElementById("detail-modal-backdrop").classList.add("open");
+}
+
+async function showBuildDetail(buildId, coordinatorId) {
+  openDetailModal("Build Details", buildId, "<div class='detail-empty'>Loading…</div>");
+  try {
+    const res  = await fetch(`/api/build?build_id=${encodeURIComponent(buildId)}&coordinator_id=${encodeURIComponent(coordinatorId)}`);
+    const data = await res.json();
+    if (data.error) { document.getElementById("detail-modal-body").innerHTML = `<div class='detail-empty'>${data.error}</div>`; return; }
+    if (!data.rows.length) { document.getElementById("detail-modal-body").innerHTML = "<div class='detail-empty'>No data found for this build.</div>"; return; }
+    const row = data.rows[0];
+    const rows = data.columns.map(col => {
+      const val = row[col] ?? "—";
+      return `<tr><td>${col}</td><td>${val}</td></tr>`;
+    }).join("");
+    document.getElementById("detail-modal-body").innerHTML = `<table class="detail-kv-table">${rows}</table>`;
+  } catch(e) {
+    document.getElementById("detail-modal-body").innerHTML = `<div class='detail-empty'>Error: ${e.message}</div>`;
+  }
+}
+
+async function showBuildCacheDetail(buildId, coordinatorId) {
+  openDetailModal("Build Cache Details", buildId, "<div class='detail-empty'>Loading…</div>");
+  try {
+    const res  = await fetch(`/api/build/cache?build_id=${encodeURIComponent(buildId)}&coordinator_id=${encodeURIComponent(coordinatorId)}`);
+    const data = await res.json();
+    if (data.error) { document.getElementById("detail-modal-body").innerHTML = `<div class='detail-empty'>${data.error}</div>`; return; }
+    if (!data.rows.length) {
+      const reasonsHtml = (data.reasons || [])
+        .map(r => `<li style="margin:6px 0;color:#c0c4d8">${r}</li>`).join("");
+      document.getElementById("detail-modal-body").innerHTML =
+        `<div class='detail-empty'>No build cache data for this build.</div>` +
+        (reasonsHtml ? `<div style="padding:0 20px 20px"><p style="font-size:12px;color:#8b8fa8;margin-bottom:8px">Possible reasons:</p><ul style="font-size:12px;padding-left:18px">${reasonsHtml}</ul></div>` : "");
+      return;
+    }
+    const headers = data.columns.map(c => `<th>${c}</th>`).join("");
+    const rows    = data.rows.map(r => `<tr>${data.columns.map(c => `<td>${r[c] ?? "—"}</td>`).join("")}</tr>`).join("");
+    document.getElementById("detail-modal-body").innerHTML =
+      `<div style="overflow-x:auto"><table class="detail-rows-table"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  } catch(e) {
+    document.getElementById("detail-modal-body").innerHTML = `<div class='detail-empty'>Error: ${e.message}</div>`;
+  }
+}
+
+function copyToClipboard(el, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    el.innerHTML = "✓";
+    el.style.color = "#66bb6a";
+    setTimeout(() => { el.innerHTML = "&#x2398;"; el.style.color = ""; }, 1200);
+  });
+}
+
 function exportExcel() {
   const start = document.getElementById("start-date").value;
   const end   = document.getElementById("end-date").value;
@@ -506,7 +689,7 @@ function clearFilter() {
 function updateFilterBanner() {
   const banner = document.getElementById("filter-banner");
   if (activeFilter) {
-    const label = activeFilter.type === "email" ? "Email" : "License Key";
+    const label = "License Key";
     document.getElementById("filter-label").textContent = `${label}: ${activeFilter.value}`;
     banner.style.display = "flex";
   } else {
@@ -587,10 +770,17 @@ function renderCharts(d) {
       hovertemplate: "%{y} with distribution<extra></extra>",
     },
     {
-      x: d.dates, y: d.with_cache,
-      type: "bar", name: "With cache",
+      x: d.dates, y: d.with_cache_hits,
+      type: "bar", name: "With cache hits",
       marker: { color: "#26c6da", opacity: 0.85 },
-      hovertemplate: "%{y} with cache<extra></extra>",
+      hovertemplate: "%{y} with cache hits<extra></extra>",
+    },
+    {
+      x: d.dates, y: d.with_cache_no_hits,
+      base: d.with_cache_hits,
+      type: "bar", name: "Cache, no hits",
+      marker: { color: "#ffa726", opacity: 0.75 },
+      hovertemplate: "%{y} cache but no hits<extra></extra>",
     },
     {
       x: d.dates, y: d.new_agents,
@@ -627,10 +817,16 @@ function renderCharts(d) {
       hovertemplate: "%{y} w/ distribution<extra></extra>",
     },
     {
-      x: d.dates, y: d.cumulative_cache,
-      type: "scatter", mode: "lines", name: "Cumul. cache",
+      x: d.dates, y: d.cumulative_cache_hits,
+      type: "scatter", mode: "lines", name: "Cumul. cache hits",
       line: { color: "#26c6da", width: 2, dash: "dash" },
-      hovertemplate: "%{y} w/ cache<extra></extra>",
+      hovertemplate: "%{y} w/ cache hits<extra></extra>",
+    },
+    {
+      x: d.dates, y: d.cumulative_cache_no_hits,
+      type: "scatter", mode: "lines", name: "Cumul. cache, no hits",
+      line: { color: "#ffa726", width: 2, dash: "dash" },
+      hovertemplate: "%{y} cache but no hits<extra></extra>",
     },
     {
       x: d.dates, y: d.cumulative_agents,
@@ -718,6 +914,7 @@ function renderGrid(d) {
         <th>Acceleration Dori</th>
         <th>Cacheable Tasks</th>
         <th>Avg Needed Helpers</th>
+        <th>Buildset Version</th>
       </tr></thead>
       <tbody></tbody>
     </table>`;
@@ -728,24 +925,32 @@ function renderGrid(d) {
     pageLength: 25,
     order: [[4, "desc"]],
     columns: [
-      { data: "build_id",          render: v => `<span style="font-family:monospace;font-size:11px;color:#8b8fa8">${v}</span>` },
+      { data: "build_id", render: (v, type, row) => {
+          if (type !== "display") return v;
+          return `<span class="build-id-link" onclick="showBuildDetail('${v}','${row.coordinator_id}')">${v}</span>`;
+      }},
       { data: "build_title" },
       { data: "license_key", render: (v, type) => {
           if (type !== "display") return v;
           const active = activeFilter?.type === "license_key" && activeFilter?.value === v ? " active-filter" : "";
-          return `<span class="filterable${active}" style="font-family:monospace;font-size:12px">${v}</span>`;
+          return `<span style="display:inline-flex;align-items:center;gap:5px">` +
+                 `<span class="filterable${active}" style="font-family:monospace;font-size:12px">${v}</span>` +
+                 `<span class="copy-icon" title="Copy license key" onclick="event.stopPropagation();copyToClipboard(this,'${v}')">&#x2398;</span>` +
+                 `</span>`;
       }},
-      { data: "email", render: (v, type) => {
-          if (type !== "display" || v === "N/A") return v;
-          const active = activeFilter?.type === "email" && activeFilter?.value === v ? " active-filter" : "";
-          return `<span class="filterable${active}">${v}</span>`;
-      }},
+      { data: "email" },
       { data: "license_created" },
       { data: "build_start" },
       { data: "build_end" },
       { data: "duration_sec",      type: "num", render: (v, type) => type === "display" ? fmtDuration(v) : +v },
       { data: "with_distribution", render: v => badge(v, "badge-yes-dist",  "Yes") },
-      { data: "with_cache",        render: v => badge(v, "badge-yes-cache", "Yes") },
+      { data: "with_cache", render: (v, type, row) => {
+          if (type !== "display") return v;
+          const label = v === "yes" ? "Yes" : v === "no_hits" ? "No hits" : "No";
+          const cls   = v === "yes" ? "badge-yes-cache" : v === "no_hits" ? "badge-no-hits" : "badge-no";
+          return `<span class="cache-badge-link" onclick="showBuildCacheDetail('${row.build_id}','${row.coordinator_id}')">`
+               + `<span class="badge ${cls}">${label}</span></span>`;
+      }},
       { data: "acceleration",      type: "num", render: (v, type) => {
           if (v === null || v === undefined) return type === "display" ? "—" : -1;
           return type === "display"
@@ -765,6 +970,7 @@ function renderGrid(d) {
           v === null || v === undefined ? (type === "display" ? "—" : -1) : v },
       { data: "avg_actual_needed_helpers", type: "num", render: (v, type) =>
           v === null || v === undefined ? (type === "display" ? "—" : -1) : (type === "display" ? v.toFixed(1) : v) },
+      { data: "buildset_version", render: v => v ?? "—" },
     ],
     language: {
       search: "Filter:",
@@ -773,9 +979,6 @@ function renderGrid(d) {
     },
     createdRow(row, data) {
       $("td:eq(2)", row).css("cursor", "pointer").on("click", () => applyFilter("license_key", data.license_key));
-      if (data.email !== "N/A") {
-        $("td:eq(3)", row).css("cursor", "pointer").on("click", () => applyFilter("email", data.email));
-      }
     },
   });
 
