@@ -466,7 +466,7 @@
 <header>
   <h1>Incredibuild Free Trial Dashboard</h1>
   <span>All builds on free trial licenses</span>
-  <a class="logout" href="/logout">Sign out</a>
+  {% if not token_mode %}<a class="logout" href="/logout">Sign out</a>{% endif %}
 </header>
 
 <div class="controls">

@@ -1,8 +1,12 @@
+import os
+
 import snowflake.connector
 
 
 ACCOUNT = "lalywxa-ja51028"
-USER = "nir.stern@incredibuild.com"
+USER = os.environ.get("SNOWFLAKE_USER", "nir.stern@incredibuild.com")
+# Programmatic access token; when set it replaces the browser login
+TOKEN = os.environ.get("SNOWFLAKE_TOKEN")
 
 
 def get_connection(database: str = None, schema: str = None, warehouse: str = "USER_WH", role: str = None):
@@ -12,6 +16,9 @@ def get_connection(database: str = None, schema: str = None, warehouse: str = "U
         "authenticator": "externalbrowser",
         "warehouse": warehouse,
     }
+    if TOKEN:
+        params["authenticator"] = "PROGRAMMATIC_ACCESS_TOKEN"
+        params["token"] = TOKEN
     if database:
         params["database"] = database
     if schema:

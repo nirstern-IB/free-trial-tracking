@@ -11,6 +11,15 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for, s
 
 SNOWFLAKE_ACCOUNT = "lalywxa-ja51028"
 
+# Token mode: when SNOWFLAKE_TOKEN (a programmatic access token) is set, the app
+# connects as SNOWFLAKE_USER with that token and skips the browser login.
+SNOWFLAKE_TOKEN = os.environ.get("SNOWFLAKE_TOKEN")
+SNOWFLAKE_USER  = os.environ.get("SNOWFLAKE_USER")
+TOKEN_MODE      = bool(SNOWFLAKE_TOKEN)
+
+if TOKEN_MODE and not SNOWFLAKE_USER:
+    raise RuntimeError("SNOWFLAKE_USER must be set when SNOWFLAKE_TOKEN is set.")
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 
@@ -19,6 +28,9 @@ DEFAULT_END   = date.today().isoformat()
 
 # In-memory connection store — keyed by session id (localhost only)
 _connections: dict = {}
+
+# Single shared connection used in token mode
+_token_connection = None
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +46,36 @@ def _open_connection(username: str):
     )
 
 
+def _open_token_connection():
+    return snowflake.connector.connect(
+        account=SNOWFLAKE_ACCOUNT,
+        user=SNOWFLAKE_USER,
+        authenticator="PROGRAMMATIC_ACCESS_TOKEN",
+        token=SNOWFLAKE_TOKEN,
+        warehouse="USER_WH",
+    )
+
+
+def get_token_connection():
+    global _token_connection
+    if _token_connection is not None:
+        try:
+            _token_connection.cursor().execute("SELECT 1")
+            return _token_connection
+        except Exception:
+            _token_connection = None
+    _token_connection = _open_token_connection()
+    return _token_connection
+
+
 def get_user_connection():
+    if TOKEN_MODE:
+        try:
+            return get_token_connection()
+        except Exception as e:
+            app.logger.error("Snowflake token connection failed: %s", e)
+            return None
+
     sid = session.get("sid")
     if not sid or sid not in _connections:
         return None
@@ -68,7 +109,10 @@ def login():
         return redirect(url_for("index"))
 
     error = None
-    if request.method == "POST":
+    if TOKEN_MODE:
+        # No form to fill in — the token connection itself failed
+        error = "Could not connect to Snowflake with SNOWFLAKE_TOKEN. Check the server log."
+    elif request.method == "POST":
         username = request.form.get("username", "").strip()
         if not username:
             error = "Please enter your Snowflake username."
@@ -83,11 +127,14 @@ def login():
             except Exception as e:
                 error = str(e)
 
-    return render_template("login.html", error=error)
+    return render_template("login.html", error=error, token_mode=TOKEN_MODE)
 
 
 @app.route("/logout")
 def logout():
+    if TOKEN_MODE:
+        return redirect(url_for("index"))
+
     sid = session.pop("sid", None)
     if sid and sid in _connections:
         try:
@@ -365,7 +412,8 @@ def fetch_dashboard_data(conn, start: str, end: str, filter_clause: str = "") ->
 @app.route("/")
 @login_required
 def index():
-    return render_template("index.html", default_start=DEFAULT_START, default_end=DEFAULT_END)
+    return render_template("index.html", default_start=DEFAULT_START, default_end=DEFAULT_END,
+                           token_mode=TOKEN_MODE)
 
 
 @app.route("/api/data")

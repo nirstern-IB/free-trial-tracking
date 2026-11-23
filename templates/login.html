@@ -100,6 +100,7 @@
     <div class="logo">Incredibuild</div>
     <div class="subtitle">Free Trial Dashboard</div>
 
+    {% if not token_mode %}
     <form method="POST" action="/login">
       <label for="username">Snowflake username (email)</label>
       <input type="email" id="username" name="username"
@@ -108,6 +109,7 @@
     </form>
 
     <p class="hint">A browser tab will open for Snowflake SSO authentication.</p>
+    {% endif %}
 
     {% if error %}
       <div class="error">{{ error }}</div>
