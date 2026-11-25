@@ -1,0 +1,25 @@
+schema = 1
+mode = "driver"
+goal = "The free-trial-tracking app loads with sample data, and the agent can filter builds by license and observe matching rows."
+depends_on = []
+
+[requirements]
+image = "ghcr.io/islo-labs/islo-runner:latest"
+capabilities = []
+vcpus = 2
+memory_mb = 4096
+disk_gb = 25
+
+[timeouts]
+install_seconds = 600
+build_seconds = 300
+test_seconds = 300
+start_seconds = 60
+start_verification_seconds = 60
+health_seconds = 30
+stop_seconds = 30
+status_seconds = 30
+
+[environment]
+required = []
+optional = ["SAMPLE_DATA", "FLASK_SECRET_KEY"]
