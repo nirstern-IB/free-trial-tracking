@@ -46,6 +46,15 @@
       transition: color 0.15s, border-color 0.15s;
     }
     header .logout:hover { color: #e0e0e0; border-color: #8b8fa8; }
+    header .sample-badge {
+      margin-left: auto;
+      font-size: 12px;
+      font-weight: 600;
+      color: #1a1d2e;
+      background: #f5b942;
+      padding: 4px 10px;
+      border-radius: 6px;
+    }
 
     .controls {
       background: #1a1d27;
@@ -466,6 +475,7 @@
 <header>
   <h1>Incredibuild Free Trial Dashboard</h1>
   <span>All builds on free trial licenses</span>
+  {% if sample_mode %}<span class="sample-badge" title="Made-up data from sample_data/, not Snowflake">Sample data</span>{% endif %}
   {% if not token_mode %}<a class="logout" href="/logout">Sign out</a>{% endif %}
 </header>
 

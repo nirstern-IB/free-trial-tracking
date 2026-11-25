@@ -20,6 +20,10 @@ TOKEN_MODE      = bool(SNOWFLAKE_TOKEN)
 if TOKEN_MODE and not SNOWFLAKE_USER:
     raise RuntimeError("SNOWFLAKE_USER must be set when SNOWFLAKE_TOKEN is set.")
 
+# Sample mode: when started with --sample-data (or SAMPLE_DATA=1), the app reads
+# made-up data from sample_data/ via sample_db.py and never contacts Snowflake.
+SAMPLE_MODE = os.environ.get("SAMPLE_DATA", "").lower() in ("1", "true", "yes")
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 
@@ -69,6 +73,14 @@ def get_token_connection():
 
 
 def get_user_connection():
+    if SAMPLE_MODE:
+        import sample_db
+        try:
+            return sample_db.get_connection()
+        except Exception as e:
+            app.logger.error("Loading sample data failed: %s", e)
+            return None
+
     if TOKEN_MODE:
         try:
             return get_token_connection()
@@ -109,7 +121,9 @@ def login():
         return redirect(url_for("index"))
 
     error = None
-    if TOKEN_MODE:
+    if SAMPLE_MODE:
+        error = "Could not load the sample data in sample_data/. Check the server log."
+    elif TOKEN_MODE:
         # No form to fill in — the token connection itself failed
         error = "Could not connect to Snowflake with SNOWFLAKE_TOKEN. Check the server log."
     elif request.method == "POST":
@@ -127,12 +141,12 @@ def login():
             except Exception as e:
                 error = str(e)
 
-    return render_template("login.html", error=error, token_mode=TOKEN_MODE)
+    return render_template("login.html", error=error, token_mode=TOKEN_MODE or SAMPLE_MODE)
 
 
 @app.route("/logout")
 def logout():
-    if TOKEN_MODE:
+    if TOKEN_MODE or SAMPLE_MODE:
         return redirect(url_for("index"))
 
     sid = session.pop("sid", None)
@@ -413,7 +427,7 @@ def fetch_dashboard_data(conn, start: str, end: str, filter_clause: str = "") ->
 @login_required
 def index():
     return render_template("index.html", default_start=DEFAULT_START, default_end=DEFAULT_END,
-                           token_mode=TOKEN_MODE)
+                           token_mode=TOKEN_MODE or SAMPLE_MODE, sample_mode=SAMPLE_MODE)
 
 
 @app.route("/api/data")
@@ -618,4 +632,12 @@ def api_build_cache():
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Free trial tracking dashboard")
+    parser.add_argument("--sample-data", action="store_true",
+                        help="use the bundled sample data instead of Snowflake")
+    if parser.parse_args().sample_data:
+        SAMPLE_MODE = True
+
     app.run(debug=True, port=5050)

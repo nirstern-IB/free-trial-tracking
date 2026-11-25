@@ -33,6 +33,7 @@ to run from source. It is not a wheel or a standalone executable.
 ```
 
 The tests use Flask's in-process test client and mock database connections.
+The sample data tests run the real queries against the bundled sample data.
 They do not start a server, contact Snowflake, or require environment settings
 or credentials. Build and install also require no application settings.
 
@@ -48,3 +49,32 @@ interactive Snowflake browser authentication. For token authentication, supply
 `FLASK_SECRET_KEY` optionally supplies the session signing secret; otherwise
 the application generates a new one on process startup. Never commit secrets.
 The development server enables debugging and is intended for local use.
+
+## Run with sample data
+
+To run the dashboard without Snowflake, use the bundled sample data:
+
+```sh
+.venv/bin/python app.py --sample-data
+# or, where passing a flag is awkward:
+SAMPLE_DATA=1 .venv/bin/python app.py
+```
+
+Sample mode needs no credentials and skips the login page. The header shows a
+"Sample data" badge. The data is made up: 100 free trial users (plus 10 paid
+licenses the dashboard should exclude) with about 4,800 builds over roughly
+eleven months. The app shifts the dates when it starts so the data always ends
+around today.
+
+The data lives in `sample_data/` as one CSV per Snowflake table, named
+`<DATABASE>.<SCHEMA>.<TABLE>.csv`. `sample_db.py` loads them into an in-memory
+DuckDB database under the same table names, so the app runs its normal SQL
+against them. To change the data, edit `scripts/generate_sample_data.py` and
+regenerate:
+
+```sh
+.venv/bin/python scripts/generate_sample_data.py
+```
+
+The script uses a fixed random seed, so re-running it without changes
+reproduces the same files.
