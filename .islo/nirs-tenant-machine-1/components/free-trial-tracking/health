@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+component_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+cd "$component_dir/../../../.."
+export SAMPLE_DATA="${SAMPLE_DATA:-1}"
+exec .venv/bin/python "$component_dir/runtime.py" health

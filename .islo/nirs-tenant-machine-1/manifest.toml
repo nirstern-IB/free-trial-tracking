@@ -1,0 +1,5 @@
+active_components = ["free-trial-tracking"]
+based_on = "134c2aa34f0824ca8bb01498a62bd5ce234d5b07"
+revision = 6
+schema = 1
+verification_targets = ["free-trial-tracking"]
