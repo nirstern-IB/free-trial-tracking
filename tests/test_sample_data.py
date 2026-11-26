@@ -1,5 +1,6 @@
 import importlib
 import os
+import re
 import unittest
 from datetime import date, timedelta
 from unittest.mock import patch
@@ -43,6 +44,21 @@ class SampleDataTests(unittest.TestCase):
         with patch.object(dashboard, "fetch_dashboard_data", return_value={}) as fetch_data:
             self.client.get("/api/data")
         self.assertEqual(fetch_data.call_args.args[1:3], (expected_start, date.today().isoformat()))
+
+    def test_default_range_advances_after_midnight(self):
+        with patch.object(dashboard, "date") as app_date:
+            app_date.today.return_value = date(2026, 11, 27)
+            response = self.client.get("/")
+            start = re.search(rb'id="start-date" value="([^"]+)"', response.data).group(1)
+            end = re.search(rb'id="end-date" value="([^"]+)"', response.data).group(1)
+            self.assertEqual((start, end), (b"2026-10-28", b"2026-11-27"))
+            app_date.today.assert_called_once()
+
+            app_date.today.reset_mock()
+            with patch.object(dashboard, "fetch_dashboard_data", return_value={}) as fetch_data:
+                self.client.get("/api/data")
+            self.assertEqual(fetch_data.call_args.args[1:3], ("2026-10-28", "2026-11-27"))
+            app_date.today.assert_called_once()
 
     def test_summary_counts_the_100_free_trial_users(self):
         response = self.client.get("/api/data", query_string={"start": "2024-01-01"})
