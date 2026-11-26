@@ -1,7 +1,7 @@
 import os
 import re
 import secrets
-from datetime import date
+from datetime import date, timedelta
 from functools import wraps
 
 import snowflake.connector
@@ -27,8 +27,10 @@ SAMPLE_MODE = os.environ.get("SAMPLE_DATA", "").lower() in ("1", "true", "yes")
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 
-DEFAULT_START = "2026-01-01"
-DEFAULT_END   = date.today().isoformat()
+
+def default_date_range():
+    today = date.today()
+    return (today - timedelta(days=30)).isoformat(), today.isoformat()
 
 # In-memory connection store — keyed by session id (localhost only)
 _connections: dict = {}
@@ -426,7 +428,8 @@ def fetch_dashboard_data(conn, start: str, end: str, filter_clause: str = "") ->
 @app.route("/")
 @login_required
 def index():
-    return render_template("index.html", default_start=DEFAULT_START, default_end=DEFAULT_END,
+    default_start, default_end = default_date_range()
+    return render_template("index.html", default_start=default_start, default_end=default_end,
                            token_mode=TOKEN_MODE or SAMPLE_MODE, sample_mode=SAMPLE_MODE)
 
 
@@ -434,8 +437,9 @@ def index():
 @login_required
 def api_data():
     conn             = get_user_connection()
-    start            = request.args.get("start",            DEFAULT_START)
-    end              = request.args.get("end",              DEFAULT_END)
+    default_start, default_end = default_date_range()
+    start            = request.args.get("start",            default_start)
+    end              = request.args.get("end",              default_end)
     filter_type      = request.args.get("filter_type",      "")
     filter_value     = request.args.get("filter_value",     "")
     new_agents_only  = request.args.get("new_agents_only",  "")
@@ -455,8 +459,9 @@ def api_data():
 @login_required
 def api_grid():
     conn             = get_user_connection()
-    start            = request.args.get("start",            DEFAULT_START)
-    end              = request.args.get("end",              DEFAULT_END)
+    default_start, default_end = default_date_range()
+    start            = request.args.get("start",            default_start)
+    end              = request.args.get("end",              default_end)
     filter_type      = request.args.get("filter_type",      "")
     filter_value     = request.args.get("filter_value",     "")
     new_agents_only  = request.args.get("new_agents_only",  "")
@@ -504,8 +509,9 @@ def api_grid():
 @login_required
 def api_export():
     conn             = get_user_connection()
-    start            = request.args.get("start",            DEFAULT_START)
-    end              = request.args.get("end",              DEFAULT_END)
+    default_start, default_end = default_date_range()
+    start            = request.args.get("start",            default_start)
+    end              = request.args.get("end",              default_end)
     filter_type      = request.args.get("filter_type",      "")
     filter_value     = request.args.get("filter_value",     "")
     new_agents_only  = request.args.get("new_agents_only",  "")

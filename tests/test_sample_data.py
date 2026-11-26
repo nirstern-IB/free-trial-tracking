@@ -1,6 +1,8 @@
 import importlib
 import os
+import re
 import unittest
+from datetime import date, timedelta
 from unittest.mock import patch
 
 
@@ -32,8 +34,34 @@ class SampleDataTests(unittest.TestCase):
         self.assertIn(b"Sample data", response.data)
         self.assertNotIn(b'href="/logout"', response.data)
 
+    def test_dashboard_defaults_to_last_30_days(self):
+        response = self.client.get("/")
+        expected_start = (date.today() - timedelta(days=30)).isoformat()
+        self.assertIn(f'id="start-date" value="{expected_start}"'.encode(), response.data)
+        self.assertIn(f'id="end-date" value="{date.today().isoformat()}"'.encode(), response.data)
+        self.assertIn(b'<button onclick="setRange(30)" class="active">30d</button>', response.data)
+
+        with patch.object(dashboard, "fetch_dashboard_data", return_value={}) as fetch_data:
+            self.client.get("/api/data")
+        self.assertEqual(fetch_data.call_args.args[1:3], (expected_start, date.today().isoformat()))
+
+    def test_default_range_advances_after_midnight(self):
+        with patch.object(dashboard, "date") as app_date:
+            app_date.today.return_value = date(2026, 11, 27)
+            response = self.client.get("/")
+            start = re.search(rb'id="start-date" value="([^"]+)"', response.data).group(1)
+            end = re.search(rb'id="end-date" value="([^"]+)"', response.data).group(1)
+            self.assertEqual((start, end), (b"2026-10-28", b"2026-11-27"))
+            app_date.today.assert_called_once()
+
+            app_date.today.reset_mock()
+            with patch.object(dashboard, "fetch_dashboard_data", return_value={}) as fetch_data:
+                self.client.get("/api/data")
+            self.assertEqual(fetch_data.call_args.args[1:3], ("2026-10-28", "2026-11-27"))
+            app_date.today.assert_called_once()
+
     def test_summary_counts_the_100_free_trial_users(self):
-        response = self.client.get("/api/data")
+        response = self.client.get("/api/data", query_string={"start": "2024-01-01"})
         self.assertEqual(response.status_code, 200, response.json)
         summary = response.json["summary"]
         self.assertEqual(summary["total_agents"], 100)
@@ -42,7 +70,7 @@ class SampleDataTests(unittest.TestCase):
         self.assertGreater(summary["total_cache"], 0)
 
     def test_sample_project_and_paid_license_builds_are_excluded(self):
-        rows = self.grid()
+        rows = self.grid(start="2024-01-01")
         self.assertFalse(any("sample project" in r["build_title"] for r in rows))
         self.assertEqual(len({r["license_key"] for r in rows}), 100)
 
