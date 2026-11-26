@@ -1,7 +1,7 @@
 import os
 import re
 import secrets
-from datetime import date
+from datetime import date, timedelta
 from functools import wraps
 
 import snowflake.connector
@@ -27,7 +27,7 @@ SAMPLE_MODE = os.environ.get("SAMPLE_DATA", "").lower() in ("1", "true", "yes")
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 
-DEFAULT_START = "2026-01-01"
+DEFAULT_START = (date.today() - timedelta(days=30)).isoformat()
 DEFAULT_END   = date.today().isoformat()
 
 # In-memory connection store — keyed by session id (localhost only)
